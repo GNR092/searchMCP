@@ -78,9 +78,14 @@ class _EmbeddingFunction:
     def name(self) -> str:
         return MODEL_NAME
 
-    def __call__(self, input: list[str]) -> list[list[float]]:
-        embeddings = self.model.encode(input, normalize_embeddings=True)
-        return embeddings.tolist()
+    def __call__(self, input: Any) -> list[list[float]]:
+        return self.model.encode(input, normalize_embeddings=True).tolist()
+
+    def embed_query(self, input: Any) -> list[list[float]]:
+        return self.model.encode(input, normalize_embeddings=True).tolist()
+
+    def embed_records(self, input: Any) -> list[list[float]]:
+        return self.model.encode(input, normalize_embeddings=True).tolist()
 
 
 def _get_collection() -> Any:
