@@ -27,13 +27,14 @@ async def search(query: str, max_results: int = 10) -> str:
 
 
 @mcp.tool()
-async def search_cached(query: str, max_results: int = 10) -> str:
+async def search_cached(query: str, max_results: int = 10, auto_index: bool = True) -> str:
     """Busca con caché permanente. Si la query ya fue buscada, retorna resultados en caché (0 tokens).
-    Si es nueva, guarda en caché permanentemente e indexa para codesearch.
+    Si es nueva, guarda en caché permanentemente e indexa para codesearch si esta disponible.
 
     Args:
         query: Término de búsqueda
         max_results: Número máximo de resultados a retornar. Default: 10
+        auto_index: Si True y codesearch esta disponible, indexa automáticamente. Default: True
 
     Returns:
         Resultados formateados (del caché o frescos)
@@ -47,34 +48,42 @@ async def search_cached(query: str, max_results: int = 10) -> str:
         msg += "\n" + cached
         return msg
 
+    codesearch_ok = cache.is_codesearch_available()
     results = await search_duckduckgo(query, max_results)
 
     cache.set_cached(query, results)
-    cache.save_to_history(query, results)
+    cache.save_to_history(query, results, auto_index=auto_index)
 
     warning = cache.get_cache_warning()
+    index_msg = "Indexado con codesearch" if (auto_index and codesearch_ok) else ""
     msg = f"[NUEVO] Resultados de: \"{query}\"\n"
     if warning:
         msg += f"\n{warning}\n"
+    if index_msg:
+        msg += f"\n{index_msg}\n"
     msg += "\n" + format_results(results)
     return msg
 
 
 @mcp.tool()
-async def search_and_save(query: str, max_results: int = 10) -> str:
+async def search_and_save(query: str, max_results: int = 10, auto_index: bool = True) -> str:
     """Busca en la web y guarda los resultados en la carpeta .search/ para consultarlos después con codesearch.
 
     Args:
         query: Término de búsqueda
         max_results: Número máximo de resultados a retornar. Default: 10
+        auto_index: Si True y codesearch esta disponible, indexa automáticamente. Default: True
 
     Returns:
         Ruta donde se guardaron los resultados
     """
+    codesearch_ok = cache.is_codesearch_available()
     results = await search_duckduckgo(query, max_results)
-    save_path = cache.save_to_history(query, results)
+    save_path = cache.save_to_history(query, results, auto_index=auto_index)
     cache.set_cached(query, results)
-    return f"Resultados guardados en: {save_path}\n\nPara indexar: codesearch index --sync"
+
+    index_msg = "Indexado con codesearch" if (auto_index and codesearch_ok) else "Codesearch no disponible, omite indexado"
+    return f"Resultados guardados en: {save_path}\n\n{index_msg}"
 
 
 @mcp.tool()
@@ -98,10 +107,12 @@ def search_stats() -> str:
     """
     cache_count, cache_warning = cache.check_cache_size()
     history_count = len(list(cache.HISTORY_DIR.glob("*"))) if cache.HISTORY_DIR.exists() else 0
+    codesearch_ok = cache.is_codesearch_available()
 
     msg = f"## Estadísticas de Búsqueda\n\n"
     msg += f"- **Caché permanente**: {cache_count} entradas\n"
     msg += f"- **Historial (30 días)**: {history_count} entradas\n"
+    msg += f"- **Codesearch**: {'Disponible' if codesearch_ok else 'No instalado'}\n"
 
     if cache_warning:
         msg += f"\n[AVISO] El caché tiene {cache_count} entradas. Considera limpiar con 'search_cleanup'."
