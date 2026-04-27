@@ -1,11 +1,11 @@
 # searchmcp
 
-Servidor MCP para búsqueda web con caché permanente usando DuckDuckGo.
+Servidor MCP de búsqueda híbrida multilingüe (español + inglés) con caché local, ChromaDB persistente y DuckDuckGo.
 
 ## Requisitos
 
 - Python >= 3.9
-- [codesearch](https://github.com/codesearch/codesearch) (opcional, para indexar búsquedas)
+- `codesearch` (opcional, para indexado automático del historial)
 
 ## Instalación
 
@@ -20,108 +20,101 @@ pip install -e .
 python -m searchmcp.server
 ```
 
-## Herramientas
-
-### search
-
-Búsqueda web básica sin caché.
-
-**Argumentos:**
-- `query` (string, requerido): Término de búsqueda
-- `max_results` (integer, opcional): Número máximo de resultados. Default: 10
-
-### search_cached (Recomendado)
-
-Búsqueda con caché permanente. Si la query ya fue buscada, retorna resultados en caché (0 tokens).
-
-**Argumentos:**
-- `query` (string, requerido): Término de búsqueda
-- `max_results` (integer, opcional): Número máximo de resultados. Default: 10
-
-**Retorna:**
-- `[CACHÉ]` si los resultados vienen de caché
-- `[NUEVO]` si los resultados son frescos
-- Advertencia si caché > 100 entradas
-
-### search_and_save
-
-Busca y guarda en `.search/history/` para integración con codesearch.
-
-**Argumentos:**
-- `query` (string, requerido): Término de búsqueda
-- `max_results` (integer, opcional): Número máximo de resultados. Default: 10
-
-### search_cleanup
-
-Limpia el historial de búsqueda antiguo (entradas mayores a 30 días).
-
-### search_stats
-
-Muestra estadísticas del caché e historial.
-
-## Sistema de Caché
-
-### Estructura
-
-```
-.search/
-├── cache/                           # Caché permanente
-│   └── {hash_query}/
-│       ├── results.md
-│       └── query.txt
-├── history/                        # Historial de 30 días
-│   └── {timestamp}/
-│       ├── results.md
-│       └── query.txt
-└── .search.db                      # Índice de codesearch
-```
-
-### Cómo Funciona el Caché
-
-```
-1. Query: "Google Gemini MCP"
-2. Hash: SHA256("google gemini mcp") = "a7f3b2c1..."
-3. ¿Existe cache/a7f3b2c1/?
-   - SÍ → Retorna resultados en caché (0 tokens)
-   - NO → Busca, guarda en caché, retorna resultados
-```
-
-### Comparación de Costos
-
-| Método | Primera Vez | Repetida |
-|--------|-------------|----------|
-| `search` | 100-500 tokens | 100-500 tokens |
-| `search_cached` | 100-500 tokens | **0 tokens** |
-| codesearch en caché | 0 tokens | 0 tokens |
-
-## Integración con codesearch
-
-### Flujo de Trabajo
+## Arquitectura
 
 ```text
-1. search_cached("query")        → Busca y guarda en caché
-2. codesearch index              → Indexa .search/
-3. codesearch search "pregunta" → Consulta sin costo de API
+Consulta usuario
+    │
+    ▼
+Normalización
+    │
+    ▼
+Búsqueda local primero
+  ├── Literal en .search/
+  └── Semántica en ChromaDB
+    │
+    ▼
+Fusión + deduplicación + reranking
+    │
+    ▼
+¿Score >= 0.60?
+  ├── Sí: responde local (sin web)
+  └── No: DuckDuckGo fallback
+          + guardar en .search/
+          + indexar en ChromaDB
 ```
 
-### Comandos
+## Modelo de Embeddings
 
-```bash
-# Buscar con caché (recomendado)
-search_cached("Google Gemini MCP")
+- Modelo: `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+- Base vectorial: ChromaDB persistente en `.search/chroma/`
+- Dispositivo: CPU por defecto, CUDA automático si está disponible
 
-# Mostrar estadísticas
-search_stats()
+## Parámetros de Búsqueda
 
-# Limpiar historial antiguo
-search_cleanup()
+- `default_top_k = 5`
+- `max_top_k = 10`
+- `similarity_threshold = 0.60`
+
+## Herramientas MCP
+
+### `search`
+
+Búsqueda web directa en DuckDuckGo (sin híbrido).
+
+**Argumentos:**
+- `query` (string, requerido)
+- `max_results` (integer, opcional, default: 10)
+
+### `search_cached` (recomendada)
+
+Búsqueda híbrida local+semántica con fallback web solo si no hay resultados útiles.
+
+**Argumentos:**
+- `query` (string, requerido)
+- `top_k` (integer, opcional, default: 5, max: 10)
+- `similarity_threshold` (float, opcional, default: 0.60)
+- `web_max_results` (integer, opcional, default: 10, max: 10)
+- `auto_index` (boolean, opcional, default: true)
+
+### `search_and_save`
+
+Fuerza búsqueda web, guarda en `.search/history/` e indexa.
+
+**Argumentos:**
+- `query` (string, requerido)
+- `max_results` (integer, opcional, default: 10)
+- `auto_index` (boolean, opcional, default: true)
+
+### `search_cleanup`
+
+Elimina historial de más de 30 días (solo `history`, no `cache`, no `chroma`).
+
+### `search_stats`
+
+Muestra estado de caché, historial, codesearch, ChromaDB, modelo y dispositivo.
+
+## Estructura de Datos
+
+```text
+.search/
+├── cache/        # caché permanente de queries
+├── history/      # historial con TTL de 30 días
+└── chroma/       # ChromaDB persistente
 ```
 
-## Ejemplo de Ahorro de Tokens
+## Metadatos guardados por resultado
 
-| Escenario | Sin Caché | Con Caché | Ahorro |
-|----------|-----------|-----------|--------|
-| 1 query | 500 tokens | 500 tokens | 0% |
-| 5 queries (1 repetida) | 2500 tokens | 1000 tokens | 60% |
-| 10 queries (todas únicas) | 5000 tokens | 5000 tokens | 0% |
-| 10 queries (todas repetidas) | 5000 tokens | 500 tokens | **90%** |
+- `query_original`
+- `idioma_detectado`
+- `titulo`
+- `url`
+- `dominio`
+- `fuente` (`cache`, `chroma`, `duckduckgo`)
+- `fecha_indexacion`
+- `fecha_acceso`
+- `access_count`
+- `hash_contenido`
+- `hash_url`
+- `fragmento_normalizado`
+- `score` (normalizado 0-1)

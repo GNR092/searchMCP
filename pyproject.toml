@@ -1,11 +1,14 @@
 [project]
 name = "searchmcp"
 version = "1.0.0"
-description = "Servidor MCP para búsqueda web con caché permanente usando DuckDuckGo"
+description = "Servidor MCP de búsqueda híbrida multilingüe con caché local, ChromaDB y DuckDuckGo"
 requires-python = ">=3.9"
 dependencies = [
     "mcp>=1.0.0",
     "ddgs>=3.0.0",
+    "chromadb>=0.5.5",
+    "sentence-transformers>=3.0.0",
+    "langdetect>=1.0.9",
     "beautifulsoup4>=4.12.0",
     "httpx>=0.27.0",
     "lxml>=5.0.0",
