@@ -2,9 +2,15 @@
 
 Servidor MCP para búsqueda web con caché permanente usando DuckDuckGo.
 
+## Requisitos
+
+- Python >= 3.9
+- [codesearch](https://github.com/codesearch/codesearch) (opcional, para indexar búsquedas)
+
 ## Instalación
 
 ```bash
+pip install -r requirements.txt
 pip install -e .
 ```
 
