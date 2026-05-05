@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import re
 from datetime import datetime
@@ -22,6 +23,17 @@ _chroma_collection = None
 _embedding_ready = None
 _embedding_device = "cpu"
 _backend_error = ""
+_failure_count = 0
+_FAILURE_THRESHOLD = 5
+_FAILURE_RESET_SECONDS = 300
+_model = None
+_embedding_function = None
+
+
+def reset_circuit_breaker() -> None:
+    global _failure_count, _chroma_collection
+    _failure_count = 0
+    _chroma_collection = None
 
 
 def normalize_text(text: str) -> str:
@@ -89,7 +101,10 @@ class _EmbeddingFunction:
 
 
 def _get_collection() -> Any:
-    global _chroma_collection, _embedding_ready, _embedding_device, _backend_error
+    global _chroma_collection, _embedding_ready, _embedding_device, _backend_error, _failure_count, _model, _embedding_function
+
+    if _failure_count >= _FAILURE_THRESHOLD:
+        return None
 
     if _chroma_collection is not None:
         return _chroma_collection
@@ -100,18 +115,22 @@ def _get_collection() -> Any:
 
         CHROMA_DIR.mkdir(parents=True, exist_ok=True)
         _embedding_device = "cuda" if _cuda_available() else "cpu"
-        model = SentenceTransformer(MODEL_NAME, device=_embedding_device)
-        embedding_function = _EmbeddingFunction(model)
+        if _model is None:
+            _model = SentenceTransformer(MODEL_NAME, device=_embedding_device)
+        if _embedding_function is None:
+            _embedding_function = _EmbeddingFunction(_model)
         client = chromadb.PersistentClient(path=str(CHROMA_DIR))
         _chroma_collection = client.get_or_create_collection(
             name=CHROMA_COLLECTION,
-            embedding_function=embedding_function,
+            embedding_function=_embedding_function,
             metadata={"hnsw:space": "cosine"},
         )
         _embedding_ready = True
         _backend_error = ""
+        _failure_count = 0
         return _chroma_collection
     except Exception as exc:
+        _failure_count += 1
         _embedding_ready = False
         _backend_error = str(exc)
         return None
@@ -125,6 +144,8 @@ def backend_status() -> dict[str, Any]:
         "device": _embedding_device,
         "path": str(CHROMA_DIR),
         "error": _backend_error,
+        "circuit_breaker_failures": _failure_count,
+        "circuit_breaker_threshold": _FAILURE_THRESHOLD,
     }
 
 
@@ -208,7 +229,14 @@ def index_results(query: str, results: list[SearchResult], source: str = "duckdu
 
 
 def _extract_entries_from_markdown(file_path: Path) -> list[dict[str, Any]]:
-    text = file_path.read_text(encoding="utf-8", errors="ignore")
+    try:
+        if file_path.suffix == ".gz":
+            with gzip.open(file_path, "rt", encoding="utf-8") as f:
+                text = f.read()
+        else:
+            text = file_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return []
     pattern = re.compile(
         r"##\s+\d+\.\s+(?P<title>.+?)\n\n\*\*URL\*\*:\s+(?P<url>.+?)\n\n(?P<snippet>.*?)(?:\n\n\*\*Motor\*\*:.*?\n\n---|\Z)",
         re.DOTALL,
@@ -264,6 +292,7 @@ def literal_search(query: str, max_results: int = MAX_TOP_K) -> list[dict[str, A
 
 
 def semantic_search(query: str, max_results: int = MAX_TOP_K) -> list[dict[str, Any]]:
+    global _failure_count
     collection = _get_collection()
     if collection is None:
         return []
@@ -275,6 +304,7 @@ def semantic_search(query: str, max_results: int = MAX_TOP_K) -> list[dict[str, 
             n_results=top_n,
             include=["metadatas", "documents", "distances"],
         )
+        _failure_count = 0
     except Exception:
         return []
 
@@ -340,11 +370,13 @@ def merge_results(
 
 
 def mark_access(results: list[dict[str, Any]]) -> None:
+    global _failure_count
     collection = _get_collection()
     if collection is None:
         return
 
     now = datetime.utcnow().isoformat()
+    success = False
     for item in results:
         record_id = item.get("hash_url")
         if not record_id:
@@ -358,5 +390,9 @@ def mark_access(results: list[dict[str, Any]]) -> None:
             metadata["access_count"] = int(metadata.get("access_count", 0)) + 1
             metadata["fecha_acceso"] = now
             collection.update(ids=[record_id], metadatas=[metadata])
+            success = True
         except Exception:
             continue
+
+    if success:
+        _failure_count = 0

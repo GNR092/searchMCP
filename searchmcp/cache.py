@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import shutil
 import subprocess
@@ -30,9 +31,13 @@ def get_cache_path(query: str) -> Path:
 
 
 def get_cached(query: str) -> Optional[str]:
-    results_file = get_cache_path(query) / "results.md"
+    results_file = get_cache_path(query) / "results.md.gz"
     if results_file.exists():
-        return results_file.read_text(encoding="utf-8", errors="ignore")
+        with gzip.open(results_file, "rt", encoding="utf-8") as f:
+            return f.read()
+    results_file_plain = get_cache_path(query) / "results.md"
+    if results_file_plain.exists():
+        return results_file_plain.read_text(encoding="utf-8", errors="ignore")
     return None
 
 
@@ -54,7 +59,7 @@ def set_cached(query: str, results: list[SearchResult]) -> str:
         md_content += f"**Motor**: {result.engine}\n\n"
         md_content += "---\n\n"
 
-    (cache_path / "results.md").write_text(md_content, encoding="utf-8")
+    (cache_path / "results.md.gz").write_bytes(gzip.compress(md_content.encode("utf-8")))
     (cache_path / "query.txt").write_text(query, encoding="utf-8")
     return str(cache_path.absolute())
 
@@ -126,7 +131,7 @@ def save_to_history(query: str, results: list[SearchResult], auto_index: bool = 
         md_content += f"**Motor**: {result.engine}\n\n"
         md_content += "---\n\n"
 
-    (history_path / "results.md").write_text(md_content, encoding="utf-8")
+    (history_path / "results.md.gz").write_bytes(gzip.compress(md_content.encode("utf-8")))
     (history_path / "query.txt").write_text(query, encoding="utf-8")
 
     cleanup_old_history()
