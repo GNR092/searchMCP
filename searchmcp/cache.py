@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 from datetime import datetime, timedelta
@@ -10,8 +11,15 @@ from typing import Optional
 from .models import SearchResult
 
 
-CACHE_DIR = Path(".search") / "cache"
-HISTORY_DIR = Path(".search") / "history"
+def _config_dir() -> Path:
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        return Path(base) / "searchMCP"
+    return Path.home() / ".config" / "searchMCP"
+
+
+CACHE_DIR = _config_dir() / "cache"
+HISTORY_DIR = _config_dir() / "history"
 CACHE_SIZE_WARNING = 100
 HISTORY_DAYS = 30
 
