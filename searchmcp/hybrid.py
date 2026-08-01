@@ -20,12 +20,10 @@ MODEL_NAME = "intfloat/multilingual-e5-small"
 QUERY_PREFIX = "query: "
 PASSAGE_PREFIX = "passage: "
 MAX_SEQ_LENGTH = 512
-BATCH_SIZE = int(os.environ.get("SEARCHMCP_EMBEDDING_BATCH_SIZE", "32"))
+BATCH_SIZE_VAR = "SEARCHMCP_EMBEDDING_BATCH_SIZE"
 CHROMA_DIR = Path(".search") / "chroma"
 CHROMA_COLLECTION = "search_results"
 
-EMBEDDINGS_DISABLED = os.environ.get("SEARCHMCP_DISABLE_EMBEDDINGS") == "1"
-RERANKER_DISABLED = os.environ.get("SEARCHMCP_DISABLE_RERANKER") == "1"
 RERANKER_MODEL = os.environ.get(
     "SEARCHMCP_RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
 )
@@ -38,6 +36,21 @@ _reranker_model: Any = None
 _reranker_ready: bool | None = None
 
 logger = logging.getLogger("searchmcp")
+
+
+def _batch_size() -> int:
+    try:
+        return max(1, int(os.environ.get("SEARCHMCP_EMBEDDING_BATCH_SIZE", "32")))
+    except ValueError:
+        return 32
+
+
+def _embeddings_disabled() -> bool:
+    return os.environ.get("SEARCHMCP_DISABLE_EMBEDDINGS") == "1"
+
+
+def _reranker_disabled() -> bool:
+    return os.environ.get("SEARCHMCP_DISABLE_RERANKER") == "1"
 
 
 def normalize_text(text: str) -> str:
@@ -166,7 +179,7 @@ class _EmbeddingFunction:
             encoded = self.model.encode(
                 prefixed,
                 normalize_embeddings=True,
-                batch_size=BATCH_SIZE,
+                batch_size=_batch_size(),
                 convert_to_numpy=True,
             ).tolist()
             for (index, text), vector in zip(missing, encoded):
@@ -197,7 +210,7 @@ def _get_collection() -> Any:
     if _chroma_collection is not None:
         return _chroma_collection
 
-    if EMBEDDINGS_DISABLED:
+    if _embeddings_disabled():
         _embedding_ready = False
         _backend_error = "Embeddings disabled by SEARCHMCP_DISABLE_EMBEDDINGS=1"
         logger.warning(_backend_error)
@@ -407,7 +420,7 @@ def _load_reranker() -> Any:
     if _reranker_ready is not None:
         return _reranker_model if _reranker_ready else None
 
-    if RERANKER_DISABLED:
+    if _reranker_disabled():
         _reranker_ready = False
         logger.debug("Reranker disabled by SEARCHMCP_DISABLE_RERANKER=1")
         return None

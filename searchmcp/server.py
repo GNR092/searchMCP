@@ -211,29 +211,10 @@ def format_hybrid_results(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Servidor SearchMCP: búsqueda web con caché local e indexado")
-    parser.add_argument(
-        "-search",
-        "--search",
-        metavar="QUERY",
-        help="Realiza una búsqueda web y muestra los resultados en consola",
-    )
-    parser.add_argument(
-        "-n",
-        "--max-results",
-        type=int,
-        default=10,
-        help="Número máximo de resultados a mostrar (default: 10)",
-    )
-    parser.add_argument("--verbose", action="store_true", help="Habilitar logging detallado")
-    args = parser.parse_args()
+    """Entry point compatible con el CLI extendido."""
+    from . import cli
 
-    if args.search:
-        results = asyncio.run(search(args.search, max_results=args.max_results))
-        print(results)
-        return
-
-    mcp.run(transport="stdio")
+    cli.main()
 
 
 if __name__ == "__main__":

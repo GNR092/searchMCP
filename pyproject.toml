@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.scripts]
-searchmcp = "searchmcp.server:main"
+searchmcp = "searchmcp.cli:main"
 
 [build-system]
 requires = ["hatchling"]

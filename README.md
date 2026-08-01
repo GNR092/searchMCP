@@ -18,9 +18,38 @@ pip install -e .
 
 ## Uso
 
+### Modo servidor MCP (stdio)
+
 ```bash
 python -m searchmcp.server
+# o
+searchmcp server
 ```
+
+### CLI
+
+```bash
+# Búsqueda web directa
+searchmcp search "que es un gguf" -n 5
+
+# Búsqueda híbrida semántica + fallback web
+searchmcp cached "que es un gguf" -k 5 -t 0.6
+
+# Forzar modo web sin cargar embeddings
+searchmcp cached "que es un gguf" --disable-embeddings
+
+# Buscar web y guardar/indexar resultados
+searchmcp save "python asyncio" -n 10
+
+# Estadísticas y limpieza
+searchmcp stats
+searchmcp cleanup
+
+# Salida JSON (útil para scripts)
+searchmcp search "llama.cpp" -n 3 --json
+```
+
+También se mantiene el uso legacy: `searchmcp -search "query" -n 5`.
 
 ## Arquitectura
 
