@@ -1,7 +1,7 @@
 [project]
 name = "searchmcp"
 version = "1.1.0"
-description = "Servidor MCP de búsqueda híbrida multilingüe con caché local, ChromaDB y DuckDuckGo"
+description = "Servidor MCP de búsqueda semántica multilingüe con embeddings locales, ChromaDB y DuckDuckGo"
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.0.0",
@@ -12,7 +12,6 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "httpx>=0.27.0",
     "lxml>=5.0.0",
-    "ddg>=0.2.2",
 ]
 
 [project.scripts]

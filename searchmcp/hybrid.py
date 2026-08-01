@@ -1,27 +1,43 @@
 from __future__ import annotations
 
 import hashlib
+import logging
+import os
 import re
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from . import cache
 from .models import SearchResult
 
 
 DEFAULT_TOP_K = 5
 MAX_TOP_K = 10
 DEFAULT_SIMILARITY_THRESHOLD = 0.60
-MODEL_NAME = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+MODEL_NAME = "intfloat/multilingual-e5-small"
+QUERY_PREFIX = "query: "
+PASSAGE_PREFIX = "passage: "
+MAX_SEQ_LENGTH = 512
+BATCH_SIZE = int(os.environ.get("SEARCHMCP_EMBEDDING_BATCH_SIZE", "32"))
 CHROMA_DIR = Path(".search") / "chroma"
 CHROMA_COLLECTION = "search_results"
 
+EMBEDDINGS_DISABLED = os.environ.get("SEARCHMCP_DISABLE_EMBEDDINGS") == "1"
+RERANKER_DISABLED = os.environ.get("SEARCHMCP_DISABLE_RERANKER") == "1"
+RERANKER_MODEL = os.environ.get(
+    "SEARCHMCP_RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+)
+
 _chroma_collection = None
-_embedding_ready = None
+_embedding_ready: bool | None = None
 _embedding_device = "cpu"
 _backend_error = ""
+_reranker_model: Any = None
+_reranker_ready: bool | None = None
+
+logger = logging.getLogger("searchmcp")
 
 
 def normalize_text(text: str) -> str:
@@ -62,6 +78,37 @@ def hash_content(title: str, snippet: str, url: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+class _EmbeddingCache:
+    """LRU in-memory cache for embedding vectors keyed by (model, prefix, text)."""
+
+    def __init__(self, capacity: int = 2048) -> None:
+        self._capacity = max(1, capacity)
+        self._data: OrderedDict[str, list[float]] = OrderedDict()
+
+    def _key(self, model_name: str, prefix: str, text: str) -> str:
+        token = f"{model_name}:{prefix}:{text}"
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def get(self, model_name: str, prefix: str, text: str) -> list[float] | None:
+        key = self._key(model_name, prefix, text)
+        value = self._data.pop(key, None)
+        if value is not None:
+            self._data[key] = value
+        return value
+
+    def put(self, model_name: str, prefix: str, text: str, vector: list[float]) -> None:
+        key = self._key(model_name, prefix, text)
+        if key in self._data:
+            self._data.move_to_end(key)
+        else:
+            self._data[key] = vector
+        if len(self._data) > self._capacity:
+            self._data.popitem(last=False)
+
+
+_embedding_cache = _EmbeddingCache(capacity=2048)
+
+
 def _cuda_available() -> bool:
     try:
         import torch
@@ -74,18 +121,74 @@ def _cuda_available() -> bool:
 class _EmbeddingFunction:
     def __init__(self, model: Any) -> None:
         self.model = model
+        self._tokenizer = getattr(model, "tokenizer", None)
+        self._max_seq_length = MAX_SEQ_LENGTH
+        if hasattr(model, "max_seq_length") and model.max_seq_length:
+            self._max_seq_length = min(int(model.max_seq_length), MAX_SEQ_LENGTH)
 
     def name(self) -> str:
         return MODEL_NAME
 
+    def _truncate(self, texts: list[str]) -> list[str]:
+        if self._tokenizer is None:
+            return texts
+        try:
+            truncated = self._tokenizer(
+                texts,
+                truncation=True,
+                max_length=self._max_seq_length,
+                add_special_tokens=True,
+            )
+            # Reconstruct strings from token ids to keep the input shape expected by encode.
+            return self._tokenizer.batch_decode(
+                truncated["input_ids"], skip_special_tokens=True
+            )
+        except Exception:
+            return texts
+
+    def _encode_with_cache(self, texts: list[str], prefix: str) -> list[list[float]]:
+        if not texts:
+            return []
+
+        vectors: list[list[float] | None] = [None] * len(texts)
+        missing: list[tuple[int, str]] = []
+
+        for index, text in enumerate(texts):
+            cached = _embedding_cache.get(MODEL_NAME, prefix, text)
+            if cached is not None:
+                vectors[index] = cached
+            else:
+                missing.append((index, text))
+
+        if missing:
+            prefixed = [prefix + text for _, text in missing]
+            prefixed = self._truncate(prefixed)
+            encoded = self.model.encode(
+                prefixed,
+                normalize_embeddings=True,
+                batch_size=BATCH_SIZE,
+                convert_to_numpy=True,
+            ).tolist()
+            for (index, text), vector in zip(missing, encoded):
+                _embedding_cache.put(MODEL_NAME, prefix, text, vector)
+                vectors[index] = vector
+
+        return vectors
+
     def __call__(self, input: Any) -> list[list[float]]:
-        return self.model.encode(input, normalize_embeddings=True).tolist()
+        if isinstance(input, str):
+            input = [input]
+        texts = list(input)
+        return self._encode_with_cache(texts, PASSAGE_PREFIX)
 
     def embed_query(self, input: Any) -> list[list[float]]:
-        return self.model.encode(input, normalize_embeddings=True).tolist()
+        if isinstance(input, str):
+            input = [input]
+        texts = list(input)
+        return self._encode_with_cache(texts, QUERY_PREFIX)
 
     def embed_records(self, input: Any) -> list[list[float]]:
-        return self.model.encode(input, normalize_embeddings=True).tolist()
+        return self.__call__(input)
 
 
 def _get_collection() -> Any:
@@ -93,6 +196,12 @@ def _get_collection() -> Any:
 
     if _chroma_collection is not None:
         return _chroma_collection
+
+    if EMBEDDINGS_DISABLED:
+        _embedding_ready = False
+        _backend_error = "Embeddings disabled by SEARCHMCP_DISABLE_EMBEDDINGS=1"
+        logger.warning(_backend_error)
+        return None
 
     try:
         import chromadb
@@ -110,10 +219,12 @@ def _get_collection() -> Any:
         )
         _embedding_ready = True
         _backend_error = ""
+        logger.info("ChromaDB + embeddings backend ready on %s", _embedding_device)
         return _chroma_collection
     except Exception as exc:
         _embedding_ready = False
-        _backend_error = str(exc)
+        _backend_error = f"{type(exc).__name__}: {exc}"
+        logger.warning("Embedding backend unavailable: %s", _backend_error)
         return None
 
 
@@ -200,67 +311,18 @@ def index_results(query: str, results: list[SearchResult], source: str = "duckdu
         }
         for record in records
     ]
+
     try:
-        collection.upsert(ids=ids, documents=documents, metadatas=metadatas)
+        embedding_function = collection._embedding_function
+        embeddings = embedding_function(documents)
+    except Exception:
+        embeddings = None
+
+    try:
+        collection.upsert(ids=ids, documents=documents, metadatas=metadatas, embeddings=embeddings)
         return True
     except Exception:
         return False
-
-
-def _extract_entries_from_markdown(file_path: Path) -> list[dict[str, Any]]:
-    text = file_path.read_text(encoding="utf-8", errors="ignore")
-    pattern = re.compile(
-        r"##\s+\d+\.\s+(?P<title>.+?)\n\n\*\*URL\*\*:\s+(?P<url>.+?)\n\n(?P<snippet>.*?)(?:\n\n\*\*Motor\*\*:.*?\n\n---|\Z)",
-        re.DOTALL,
-    )
-    entries: list[dict[str, Any]] = []
-    for match in pattern.finditer(text):
-        title = match.group("title").strip()
-        url = match.group("url").strip()
-        snippet = match.group("snippet").strip()
-        entries.append({"title": title, "url": url, "snippet": snippet})
-    return entries
-
-
-def literal_search(query: str, max_results: int = MAX_TOP_K) -> list[dict[str, Any]]:
-    terms = [token for token in re.findall(r"[a-z0-9áéíóúñü]+", normalize_text(query)) if len(token) > 2]
-    if not terms:
-        return []
-
-    result_files = list(cache.CACHE_DIR.glob("*/results.md")) + list(cache.HISTORY_DIR.glob("*/results.md"))
-    scored: dict[str, dict[str, Any]] = {}
-
-    for file_path in result_files:
-        for entry in _extract_entries_from_markdown(file_path):
-            haystack = normalize_text(f"{entry['title']} {entry['snippet']} {entry['url']}")
-            matches = sum(1 for term in terms if term in haystack)
-            if matches <= 0:
-                continue
-            score = min(1.0, matches / max(1, len(terms)))
-            url_hash = hash_url(entry["url"])
-            record = {
-                "id": url_hash,
-                "query_original": query,
-                "idioma_detectado": detect_language(query),
-                "titulo": entry["title"],
-                "url": entry["url"],
-                "dominio": urlparse(entry["url"]).netloc.lower(),
-                "fuente": "cache",
-                "fecha_indexacion": datetime.utcfromtimestamp(file_path.stat().st_mtime).isoformat(),
-                "fecha_acceso": datetime.utcnow().isoformat(),
-                "access_count": 1,
-                "hash_contenido": hash_content(entry["title"], entry["snippet"], entry["url"]),
-                "hash_url": url_hash,
-                "fragmento_normalizado": normalize_text(entry["snippet"]),
-                "score": float(score),
-                "snippet": entry["snippet"],
-            }
-            existing = scored.get(url_hash)
-            if existing is None or record["score"] > existing["score"]:
-                scored[url_hash] = record
-
-    ordered = sorted(scored.values(), key=lambda item: item["score"], reverse=True)
-    return ordered[: max(1, min(max_results, MAX_TOP_K))]
 
 
 def semantic_search(query: str, max_results: int = MAX_TOP_K) -> list[dict[str, Any]]:
@@ -309,18 +371,18 @@ def semantic_search(query: str, max_results: int = MAX_TOP_K) -> list[dict[str, 
 
 
 def merge_results(
-    literal_results: list[dict[str, Any]],
-    semantic_results: list[dict[str, Any]],
+    primary_results: list[dict[str, Any]],
+    secondary_results: list[dict[str, Any]],
     top_k: int = DEFAULT_TOP_K,
     similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
 ) -> tuple[list[dict[str, Any]], bool]:
     merged: dict[str, dict[str, Any]] = {}
 
-    for item in literal_results:
+    for item in primary_results:
         key = item["hash_url"]
         merged[key] = dict(item)
 
-    for item in semantic_results:
+    for item in secondary_results:
         key = item["hash_url"]
         if key in merged:
             merged_item = merged[key]
@@ -337,6 +399,50 @@ def merge_results(
     selected = ordered[:clamped_top_k]
     useful = bool(selected) and float(selected[0]["score"]) >= similarity_threshold
     return selected, useful
+
+
+def _load_reranker() -> Any:
+    global _reranker_model, _reranker_ready
+
+    if _reranker_ready is not None:
+        return _reranker_model if _reranker_ready else None
+
+    if RERANKER_DISABLED:
+        _reranker_ready = False
+        logger.debug("Reranker disabled by SEARCHMCP_DISABLE_RERANKER=1")
+        return None
+
+    try:
+        from sentence_transformers import CrossEncoder
+
+        _reranker_model = CrossEncoder(RERANKER_MODEL)
+        _reranker_ready = True
+        logger.info("Reranker loaded: %s", RERANKER_MODEL)
+        return _reranker_model
+    except Exception as exc:
+        _reranker_ready = False
+        logger.warning("Reranker unavailable: %s", exc)
+        return None
+
+
+def rerank_results(query: str, results: list[dict[str, Any]], top_k: int = DEFAULT_TOP_K) -> list[dict[str, Any]]:
+    reranker = _load_reranker()
+    if reranker is None or not results:
+        return results
+
+    pairs = [[query, f"{r.get('titulo', '')}\n{r.get('snippet', '')}"] for r in results]
+    try:
+        scores = reranker.predict(pairs)
+    except Exception:
+        return results
+
+    for record, score in zip(results, scores):
+        record["score"] = float(score)
+        record["fuente"] = f"{record.get('fuente', '')}+rerank".strip("+")
+
+    ordered = sorted(results, key=lambda item: item["score"], reverse=True)
+    clamped_top_k = max(1, min(top_k, MAX_TOP_K))
+    return ordered[:clamped_top_k]
 
 
 def mark_access(results: list[dict[str, Any]]) -> None:
