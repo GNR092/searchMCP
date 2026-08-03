@@ -1,6 +1,6 @@
 [project]
 name = "searchmcp"
-version = "1.1.0"
+version = "1.2.0"
 description = "Servidor MCP de búsqueda semántica multilingüe con embeddings locales, ChromaDB y DuckDuckGo"
 requires-python = ">=3.10"
 dependencies = [
