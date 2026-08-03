@@ -1,6 +1,5 @@
 from __future__ import annotations
 import asyncio
-import argparse
 import logging
 from typing import Any
 from mcp.server.fastmcp import FastMCP
@@ -154,7 +153,7 @@ def search_stats() -> str:
     backend = hybrid.backend_status()
     indexed_count = hybrid.count_indexed()
 
-    msg = f"## Estadísticas de Búsqueda\n\n"
+    msg = "## Estadísticas de Búsqueda\n\n"
     msg += f"- **Historial (30 días)**: {history_count} entradas\n"
     msg += f"- **ChromaDB**: {'Activo' if backend['ready'] else 'No disponible'}\n"
     msg += f"- **Modelo embeddings**: {backend['model']}\n"
