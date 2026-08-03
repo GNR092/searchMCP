@@ -20,7 +20,6 @@ MODEL_NAME = "intfloat/multilingual-e5-small"
 QUERY_PREFIX = "query: "
 PASSAGE_PREFIX = "passage: "
 MAX_SEQ_LENGTH = 512
-BATCH_SIZE_VAR = "SEARCHMCP_EMBEDDING_BATCH_SIZE"
 CHROMA_DIR = Path(".search") / "chroma"
 CHROMA_COLLECTION = "search_results"
 
@@ -194,13 +193,13 @@ class _EmbeddingFunction:
         texts = list(input)
         return self._encode_with_cache(texts, PASSAGE_PREFIX)
 
-    def embed_query(self, input: Any) -> list[list[float]]:
+    def embed_query(self, input: Any) -> list[list[float]]:  # noqa: Vulture; used by ChromaDB
         if isinstance(input, str):
             input = [input]
         texts = list(input)
         return self._encode_with_cache(texts, QUERY_PREFIX)
 
-    def embed_records(self, input: Any) -> list[list[float]]:
+    def embed_records(self, input: Any) -> list[list[float]]:  # noqa: Vulture; used by ChromaDB
         return self.__call__(input)
 
 
