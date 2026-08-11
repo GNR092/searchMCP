@@ -66,7 +66,7 @@ Búsqueda semántica en ChromaDB (E5 + query:)
 ¿Score >= 0.60?
   ├── Sí: re-rankear y responder local (sin web)
   └── No: DuckDuckGo fallback
-          + guardar historial en .search/history/
+          + guardar historial en ~/.config/searchMCP/history/
           + indexar en ChromaDB (E5 + passage:)
           + re-rankear resultados combinados
 ```
@@ -81,7 +81,7 @@ Búsqueda semántica en ChromaDB (E5 + query:)
   - Desactivar: `SEARCHMCP_DISABLE_RERANKER=1`
   - Cambiar modelo: `SEARCHMCP_RERANKER_MODEL=...`
 - Caché LRU de embeddings (consultas y documentos) en memoria
-- Base vectorial: ChromaDB persistente en `.search/chroma/`
+- Base vectorial: ChromaDB persistente en `~/.config/searchMCP/chroma/`
 - Dispositivo: CPU por defecto, CUDA automático si está disponible
 - Forzar modo web sin embeddings: `SEARCHMCP_DISABLE_EMBEDDINGS=1`
 
@@ -114,7 +114,7 @@ Búsqueda semántica en ChromaDB con re-ranking y fallback a DuckDuckGo si no ha
 
 ### `search_and_save`
 
-Fuerza búsqueda web, guarda el historial en `.search/history/` y embebe los resultados en ChromaDB.
+Fuerza búsqueda web, guarda el historial en `~/.config/searchMCP/history/` y embebe los resultados en ChromaDB.
 
 **Argumentos:**
 - `query` (string, requerido)
@@ -131,7 +131,7 @@ Muestra estado del historial, ChromaDB, modelo y dispositivo.
 ## Estructura de Datos
 
 ```text
-.search/
+~/.config/searchMCP/
 ├── history/      # historial con TTL de 30 días
 └── chroma/       # ChromaDB persistente
 ```

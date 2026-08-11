@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import re
 from collections import OrderedDict
 from datetime import datetime
@@ -10,22 +9,26 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from .cache import (
+    _config_dir,
+    CHROMA_DIR,
+    CHROMA_COLLECTION,
+    DEFAULT_TOP_K,
+    MAX_TOP_K,
+    DEFAULT_SIMILARITY_THRESHOLD,
+    MODEL_NAME,
+    RERANKER_MODEL,
+    EMBEDDING_BATCH_SIZE,
+    DISABLE_EMBEDDINGS,
+    DISABLE_RERANKER,
+    MAX_SEQ_LENGTH,
+)
 from .models import SearchResult
 
 
-DEFAULT_TOP_K = 5
-MAX_TOP_K = 10
-DEFAULT_SIMILARITY_THRESHOLD = 0.60
-MODEL_NAME = "intfloat/multilingual-e5-small"
 QUERY_PREFIX = "query: "
 PASSAGE_PREFIX = "passage: "
-MAX_SEQ_LENGTH = 512
-CHROMA_DIR = Path(".search") / "chroma"
-CHROMA_COLLECTION = "search_results"
 
-RERANKER_MODEL = os.environ.get(
-    "SEARCHMCP_RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
-)
 
 _chroma_collection = None
 _embedding_ready: bool | None = None
@@ -38,18 +41,15 @@ logger = logging.getLogger("searchmcp")
 
 
 def _batch_size() -> int:
-    try:
-        return max(1, int(os.environ.get("SEARCHMCP_EMBEDDING_BATCH_SIZE", "32")))
-    except ValueError:
-        return 32
+    return max(1, EMBEDDING_BATCH_SIZE)
 
 
 def _embeddings_disabled() -> bool:
-    return os.environ.get("SEARCHMCP_DISABLE_EMBEDDINGS") == "1"
+    return DISABLE_EMBEDDINGS
 
 
 def _reranker_disabled() -> bool:
-    return os.environ.get("SEARCHMCP_DISABLE_RERANKER") == "1"
+    return DISABLE_RERANKER
 
 
 def normalize_text(text: str) -> str:
@@ -211,7 +211,7 @@ def _get_collection() -> Any:
 
     if _embeddings_disabled():
         _embedding_ready = False
-        _backend_error = "Embeddings disabled by SEARCHMCP_DISABLE_EMBEDDINGS=1"
+        _backend_error = "Embeddings disabled (config or SEARCHMCP_DISABLE_EMBEDDINGS=1)"
         logger.warning(_backend_error)
         return None
 
@@ -421,7 +421,7 @@ def _load_reranker() -> Any:
 
     if _reranker_disabled():
         _reranker_ready = False
-        logger.debug("Reranker disabled by SEARCHMCP_DISABLE_RERANKER=1")
+        logger.debug("Reranker disabled (config or SEARCHMCP_DISABLE_RERANKER=1)")
         return None
 
     try:

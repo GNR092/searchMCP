@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,8 +15,36 @@ def _config_dir() -> Path:
     return Path.home() / ".config" / "searchMCP"
 
 
+def _load_config() -> dict:
+    """Load config from ~/.config/searchMCP/config.json"""
+    config_path = _config_dir() / "config.json"
+    if config_path.exists():
+        try:
+            return json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+_config = _load_config()
+
+# Configurable defaults (JSON > env > hardcoded)
+DEFAULT_TOP_K = int(_config.get("default_top_k", 5))
+MAX_TOP_K = int(_config.get("max_top_k", 10))
+DEFAULT_SIMILARITY_THRESHOLD = float(_config.get("similarity_threshold", 0.60))
+MODEL_NAME = _config.get("model_name", "intfloat/multilingual-e5-small")
+RERANKER_MODEL = _config.get("reranker_model", os.environ.get(
+    "SEARCHMCP_RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2"
+))
+EMBEDDING_BATCH_SIZE = int(_config.get("embedding_batch_size", os.environ.get("SEARCHMCP_EMBEDDING_BATCH_SIZE", "32")))
+DISABLE_EMBEDDINGS = _config.get("disable_embeddings", os.environ.get("SEARCHMCP_DISABLE_EMBEDDINGS") == "1")
+DISABLE_RERANKER = _config.get("disable_reranker", os.environ.get("SEARCHMCP_DISABLE_RERANKER") == "1")
+MAX_SEQ_LENGTH = int(_config.get("max_seq_length", 512))
+CHROMA_COLLECTION = _config.get("chroma_collection", "search_results")
+
 HISTORY_DIR = _config_dir() / "history"
-HISTORY_DAYS = 30
+HISTORY_DAYS = int(_config.get("history_days", 30))
+CHROMA_DIR = _config_dir() / "chroma"
 
 
 def _ensure_dirs() -> None:
